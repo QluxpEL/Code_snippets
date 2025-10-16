@@ -1,0 +1,812 @@
+You can filter the text file by the keyword "New Section" to get to the start of another script sample
+
+[1] Semi-Advanced DataStore system, Server Script – New Section
+-- DataStore system that creates a folder under the player instance, providing easy data management and change. Additionally,
+-- new data froms can be added easily in the structure table.
+
+local dataStoreService = game:GetService("DataStoreService")
+local playerStore = dataStoreService:GetDataStore("PlayerStore")
+
+local structure = {
+	Global = {
+		{Name = "Coins", Default = 100, Type = "NumberValue"},
+		{Name = "GlobalXP", Default = 0, Type = "NumberValue"}
+	},
+	Sigma = {
+		{Name = "Arrest", Default = 0, Type = "NumberValue"}
+	},
+}
+
+game.Players.PlayerAdded:Connect(function(player)
+	local dataStoreFolder = Instance.new("Folder")
+	dataStoreFolder.Name = "DataStore"
+	dataStoreFolder.Parent = player
+	
+	
+	local success, playerData = pcall(function()
+		return playerStore:GetAsync(tostring(player.UserId))
+	end)
+	
+	if not success then
+		warn("Error while fetching playerData")
+		return
+	end
+	
+	for dataName, dataTable in structure do
+		local dataFolder = Instance.new("Folder")
+		dataFolder.Name = tostring(dataName)
+		dataFolder.Parent = dataStoreFolder
+		
+		for dataTitle, dataInfo in dataTable do
+			local specificValue: Instance = Instance.new(tostring(dataInfo.Type))
+			specificValue.Parent = dataFolder
+			specificValue.Name = dataInfo.Name
+			
+			local theValue =  dataInfo.Default
+			if playerData and playerData[tostring(dataName)] and playerData[tostring(dataName)][tostring(dataInfo.Name)] then 
+				theValue = playerData[tostring(dataName)][tostring(dataInfo.Name)]
+			end
+			
+			specificValue.Value = theValue
+		end
+	end
+end)
+
+game.Players.PlayerRemoving:Connect(function(player)
+	local dataStoreFolder = player:FindFirstChild("DataStore")
+	if not dataStoreFolder then
+		return
+	end
+	
+	local dataToSave = {}
+	for i, dataFolder: Folder in dataStoreFolder:GetChildren() do
+		dataToSave[dataFolder.Name] = {}
+		for _, specificData in dataFolder:GetChildren() do
+			dataToSave[dataFolder.Name][specificData.Name] = dataStoreFolder:FindFirstChild(dataFolder.Name):FindFirstChild(specificData.Name).Value
+		end
+	end
+	
+	local succes, err = pcall(function()
+		playerStore:SetAsync(tostring(player.UserId),dataToSave)
+	end)
+	
+	if not succes then
+		warn("Error while saving data:", err)
+	end
+
+end)
+
+[2] ForceField system, LocalScript – New Section
+-- This system lets local player pass through only if they are permitted to do so.
+
+local collectioNService = game:GetService("CollectionService")
+local player = game.Players.LocalPlayer
+
+local function setUpForceField(forceField: Model)
+	
+	local function getSettings()
+		return forceField:GetAttributes()
+	end
+	
+	
+	local collisionpart = forceField:FindFirstChild("Collide")
+	local startTime = os.time()
+	local broke = false
+	while not collisionpart do
+		wait()
+		if (os.time()-startTime) > 10 then
+			warn("--------")
+			warn("Infinite loading for ForceField!")
+			forceField.Name = "ForceFieldProblem"
+			warn(forceField:GetFullName())
+			warn("-------")
+			broke = true
+			break
+		end
+	end
+	
+	if broke then
+		return
+	end
+	
+	if getSettings().DisplayOnly then
+		return
+	end
+	
+	local function beamEdit(value)	
+		for i, stuff: Beam in forceField:GetDescendants() do
+			if stuff:IsA("Beam") then
+				stuff.Enabled = value
+			end
+			if stuff:IsA("Light") then
+				stuff.Enabled = value
+			end
+		end
+		if not collisionpart then
+			forceField.Name = "NoCollisionPart!"
+			warn(forceField:GetFullName(), "is missing collision part!")
+			return
+		end
+		if value then
+			collisionpart:FindFirstChild("Activate"):Play()
+			collisionpart:FindFirstChild("Buzz"):Play()
+			collisionpart.Transparency = 0.3
+			collisionpart.CanQuery = true
+		else
+			collisionpart.Transparency = 1
+			collisionpart.CanQuery = false
+			collisionpart:FindFirstChild("Deactivate"):Play()
+			collisionpart:FindFirstChild("Buzz"):Stop()
+		end
+	end
+	
+	local function collisionEdit()
+		if not collisionpart then
+			warn(forceField:GetFullName(), "is missing collision part!")
+			return
+		end
+		
+		if getSettings().CombineOnly and player.Team == game.Teams.Combine then
+			collisionpart.CanCollide = false
+			return
+		end
+		
+		if not getSettings().CombineOnly then
+			collisionpart.CanCollide = false
+			return
+		end
+		
+		if not getSettings().Enabled then
+			collisionpart.CanCollide = false
+			return
+		end
+		
+		collisionpart.CanCollide = true
+		
+	end
+
+	beamEdit(getSettings().Enabled)
+	
+	player.Changed:Connect(function(property)
+		if property ~= "Team" then
+			return
+		end
+		collisionEdit()
+	end)
+	
+	forceField:GetAttributeChangedSignal("Enabled"):Connect(function()
+		collisionEdit()
+		beamEdit(getSettings().Enabled)
+	end)
+	
+	forceField:GetAttributeChangedSignal("CombineOnly"):Connect(function()
+		collisionEdit()
+	end)
+	
+	collisionEdit()
+end
+
+for i, stuff in collectioNService:GetTagged("CombineForceField") do
+	setUpForceField(stuff)
+end
+
+[3] Simple shop with server authority, Local + Server Script – New Section
+-- A simple shop for player to purchase items or anything else, E.g., Developers can script to trigger an event. Additionally,
+-- developer can script any beforePurchase check, making sure player can purchase a specific item under a specific condition other than having Money for it.
+
+Local Script: 
+local template = script.Template
+local mainFrame = script.Parent
+local scrolingFrame = mainFrame.ScrollingFrame
+local player = game.Players.LocalPlayer
+
+local purchaseEvent = game.ReplicatedStorage.purchaseRequest
+local messageDisplay = script.Message
+
+workspace.ShopPart.ShopPrompt.Triggered:Connect(function()
+	mainFrame.Parent.Enabled = true
+end)
+
+mainFrame.Close.MouseButton1Click:Connect(function()
+	mainFrame.Parent.Enabled = false
+end)
+
+local function newMessage(text, lenght)
+	if not lenght or lenght < 3 then lenght = 3 end
+	
+	local clonedMessageDisplay = messageDisplay:Clone()
+	clonedMessageDisplay.Text = text
+	clonedMessageDisplay.Parent = mainFrame
+	clonedMessageDisplay.Visible = true
+	game.Debris:AddItem(clonedMessageDisplay, lenght)
+end
+
+for i, item in script.Items:GetChildren() do
+	local moduleScript = require(item)
+	local newFrame = template:Clone()
+	newFrame.PurchaseButton.Text = "Purchase for "..moduleScript.Price
+	newFrame.Name = moduleScript.Name
+	newFrame.Title.Text = moduleScript.Name
+	
+	newFrame.PurchaseButton.MouseButton1Click:Connect(function()
+		local success, message = moduleScript.beforePurchase()
+		if not moduleScript.beforePurchase() then
+			newMessage(message)
+			return
+		end	
+		
+		local status, serverMessage = purchaseEvent:InvokeServer(item.Name)
+		newMessage(serverMessage)
+	end)
+	
+	newFrame.Parent = scrolingFrame
+end
+
+ServerScript:
+
+game.ReplicatedStorage.purchaseRequest.OnServerInvoke = function(player, itemName)
+	if not itemName or typeof(itemName) ~= "string" then
+		return false, "itemName is not a string or is nil."
+	end
+	
+	local items = game.StarterGui.ShopUI.MainFrame.CoreHandler.Items
+	local itemModule = items:FindFirstChild(itemName)
+	
+	if not itemModule then
+		return false, "Item not found"
+	end
+	
+	itemModule = require(itemModule)
+	
+	local status, message = itemModule.beforePurchase(player)
+	
+	if not status then
+		return false, "Server declines purchase | "..message
+	end
+	
+	local purchaseStatus, purchaseMessage = itemModule.processPurchase(player)
+	return purchaseStatus, purchaseMessage
+end
+
+[4] Simon-Says hacking minigame, LocaLScript – New Section
+-- A core script that handles the core mechanics of the SimonSays minigame.
+-- It shows the player the right pattern and then waits 3 seconds. If the player does not press anything, the cycle repeats.
+-- if the player presses any button within that timeframe, the timer restarts.
+
+local player = game.Players.LocalPlayer
+local buttons = script.Parent.Buttons
+local tweenService = game:GetService("TweenService")
+local conterProvider = game:GetService("ContentProvider")
+
+local assetIds = {
+	"rbxassetid://18786398285",
+	"rbxassetid://18786397338",
+	"rbxassetid://18786396063",
+	"rbxassetid://18786394878",
+	"rbxassetid://18786393713",
+	"rbxassetid://18786392370",
+	"rbxassetid://18786391255",
+	"rbxassetid://18786389883",
+	"rbxassetid://18786387906",
+	"rbxassetid://18786386307",
+	"rbxassetid://18786385075",
+	"rbxassetid://18786384027",
+	"rbxassetid://18786382644",
+	"rbxassetid://18786381566",
+	"rbxassetid://18786380543",
+	"rbxassetid://18786379367",
+	"rbxassetid://18786377979",
+	"rbxassetid://18786376180",
+	"rbxassetid://18786374738",
+	"rbxassetid://18786373702",
+	"rbxassetid://18786372348",
+	"rbxassetid://18786368967",
+	"rbxassetid://18786367695",
+	"rbxassetid://18786366330",
+	"rbxassetid://18786365071",
+	"rbxassetid://18786362307",
+	"rbxassetid://18786361169",
+	"rbxassetid://18786360128",
+	"rbxassetid://18786357691",
+	"rbxassetid://18786356411",
+}
+
+local userFailButton = Color3.fromHex("#ff3a3d")
+local showButton = Color3.new(0.988235, 1, 0.403922)
+local userSelect = Color3.new(0, 1, 0.282353)
+
+local defaultSize = buttons:FindFirstChild("1").Size
+local targetSize = UDim2.new(defaultSize.X.Scale*1.2, 0, defaultSize.Y.Scale *1.2, 0)
+
+local playerSlecting = 0
+local target = nil
+local playerSelection = {}
+local reseved = {}
+local currentFormat = {}
+local activeTweens = {}
+local stages = 1
+
+local tweenTimeIn = 0.2
+local tweenIn = TweenInfo.new(tweenTimeIn, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut, 0, true)
+
+local function getRandomID()
+	local randomID = assetIds[math.random(1, #assetIds)]
+	if table.find(reseved, randomID) then
+		return getRandomID()
+	end
+	table.insert(reseved, randomID)
+	return randomID
+end
+
+for i, button: TextButton in buttons:GetChildren() do
+	if not button:IsA("TextButton") then
+		continue
+	end
+	button:FindFirstChildWhichIsA("ImageLabel").Image = getRandomID()
+end
+
+local progress = script.progress
+local currentStage = 1
+
+local function doThing()
+	currentFormat = {}
+	playerSelection = {}
+
+	for i, button: TextButton in buttons:GetChildren() do
+		if not button:IsA("TextButton") then
+			continue
+		end
+		button:FindFirstChildWhichIsA("ImageLabel").Image = getRandomID()
+	end
+
+	reseved = {}
+	
+	for i = 1, 6 do
+		table.insert(currentFormat, math.random(1,4))
+	end
+	
+
+	task.spawn(function()
+		local localStage = currentStage
+
+		while script.Parent.Parent and script.Parent.Parent.Enabled and currentStage == localStage do
+			if #playerSelection >= #currentFormat then
+				progress:Fire()
+				break
+			end
+			wait()
+			if (os.time()-playerSlecting) <= 3 then
+				continue
+			end
+
+			for i, number in currentFormat do
+				if (os.time()-playerSlecting) <= 3 then
+					break
+				end
+
+				playerSelection = {}
+
+				local button: TextButton = buttons:FindFirstChild(tostring(number))
+				button.Size = defaultSize
+				button.BackgroundColor3 = Color3.fromHex("#77adff")
+				button:FindFirstChildWhichIsA("Sound"):Play()
+				local tween = tweenService:Create(button, tweenIn, {Size = targetSize, BackgroundColor3 = showButton})
+				table.insert(activeTweens, tween)
+				tween:Play()
+				task.wait( (tweenTimeIn*2)+0.05 )
+			end
+			wait(3)
+		end
+	end)
+end
+
+local defaulButtonPos = script.Parent.Buttons.Position
+
+local function tweenCoreUI(tweenOut)
+	for i, thing: Instance in script.Parent:GetDescendants() do
+		local savedProprties = {}
+		local canTween = false
+
+		if thing:IsA("Frame") then
+			savedProprties.BackgroundTransparency = thing.BackgroundTransparency
+			if not tweenOut then
+				thing.BackgroundTransparency = 1
+			else
+				local tween = tweenService:Create(thing, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+					BackgroundTransparency = 1,
+				})
+				tween:Play()
+			end
+			canTween = true
+		elseif thing:IsA("TextButton") then
+			savedProprties.BackgroundTransparency = thing.BackgroundTransparency
+			savedProprties.TextTransparency = thing.TextTransparency
+			if not tweenOut then
+				thing.TextTransparency = 1
+				thing.BackgroundTransparency = 1
+			else
+				local tween = tweenService:Create(thing, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+					BackgroundTransparency = 1,
+					TextTransparency = 1,
+				})
+				tween:Play()
+			end
+			canTween = true
+		elseif thing:IsA("ImageLabel") then
+			savedProprties.BackgroundTransparency = thing.BackgroundTransparency
+			savedProprties.ImageTransparency = thing.ImageTransparency
+			if not tweenOut then
+				thing.ImageTransparency = 1
+				thing.BackgroundTransparency = 1
+			else
+				local tween = tweenService:Create(thing, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+					BackgroundTransparency = 1,
+					ImageTransparency = 1,
+				})
+				tween:Play()
+			end
+			canTween = true
+		elseif thing:IsA("UIStroke") then
+			savedProprties.Thickness = thing.Thickness
+			if not tweenOut then
+				thing.Thickness = 0
+			else
+				local tween = tweenService:Create(thing, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+					Thickness = 0,
+				})
+				tween:Play()
+			end
+			canTween = true
+		elseif thing:IsA("TextLabel") then
+			savedProprties.BackgroundTransparency = thing.BackgroundTransparency
+			savedProprties.TextTransparency = thing.TextTransparency
+			if not tweenOut then
+				thing.BackgroundTransparency = 1
+				thing.TextTransparency = 1
+			else
+				local tween = tweenService:Create(thing, TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
+					BackgroundTransparency = 1,
+					TextTransparency = 1,
+				})
+				tween:Play()
+			end
+			canTween = true
+		end
+
+		if not canTween then
+			continue
+		end
+
+		if not tweenOut then
+			local tween = tweenService:Create(thing, TweenInfo.new(1.5), savedProprties)
+			tween:Play()
+		else
+			task.delay(2.2, function()
+				local tween = tweenService:Create(thing, TweenInfo.new(0), savedProprties)
+				tween:Play()
+			end)
+		end
+	end
+end
+
+
+script.Parent.StartHack.Event:Connect(function(targetField)
+	
+	if script.Parent.Parent.Enabled then
+		return
+	end
+	
+	currentStage = 1
+	target = targetField
+	reseved = {}
+	
+	script.Parent.Parent.Enabled = true
+	tweenCoreUI()
+	wait(2)
+	doThing()
+end)
+
+local transition = false
+
+for i, button: TextButton in buttons:GetChildren() do
+	if not button:IsA("TextButton") then
+		continue
+	end
+	local db = false
+
+	button.MouseButton1Click:Connect(function()
+		playerSlecting = os.time()
+	
+		if db or not script.Parent.Parent.Enabled or transition then
+			return
+		end
+
+		for i, tween: Tween in activeTweens do
+			tween:Cancel()
+		end
+		wait()
+		for index, newButton in buttons:GetChildren() do
+			if not newButton:IsA("TextButton") then
+				continue
+			end
+			newButton.Size = defaultSize
+			newButton.BackgroundColor3 = Color3.fromHex("#77adff")
+		end
+
+		local correct = true
+
+		if currentFormat[#playerSelection+1] ~= tonumber(button.Name) then
+			correct = false
+		end
+
+		if correct then
+			table.insert(playerSelection, tonumber(button.Name))	
+			button:FindFirstChildWhichIsA("Sound"):Play()
+			local tweenButton = tweenService:Create(button, tweenIn, {Size = targetSize, BackgroundColor3 = userSelect})
+			tweenButton:Play()
+		else
+			playerSelection = {}
+			script.Parent.Error:Play()
+			for index, newButton in buttons:GetChildren() do
+				if not newButton:IsA("TextButton") then
+					continue
+				end
+				local tweenButton = tweenService:Create(newButton, tweenIn, {Size = targetSize, BackgroundColor3 = userFailButton})
+				tweenButton:Play()
+			end
+		end
+
+		db = true
+		task.wait( (tweenTimeIn*2)-0.1 )
+		db = false
+	end)
+
+end
+
+progress.Event:Connect(function()
+	transition = true
+	for index, newButton in buttons:GetChildren() do
+		if not newButton:IsA("TextButton") then
+			continue
+		end
+		local tweenButton = tweenService:Create(newButton, tweenIn, {Size = targetSize, BackgroundColor3 = userSelect})
+		tweenButton:Play()
+	end
+	script.Parent.Success:Play()
+	task.wait(tweenTimeIn*2+0.1)
+	if currentStage+1 > stages then
+		tweenCoreUI(true)
+		task.wait(2)
+		script.Parent.Parent.Enabled = false
+		game.ReplicatedStorage.MainStorage.RemoteEvent.FieldHacking.HackingCompleated:FireServer(target)
+		target = nil
+	else
+		currentStage += 1
+		doThing()
+		task.delay(5, function()
+			transition = false
+		end)
+		return
+	end
+	transition = false
+end)
+
+[5] Custom Proximity Prompt, LocalScript – New Section
+-- Script that sets up custom proximityPrompts
+-- This is one of my older scripts
+
+local ProximityPromptService = game:GetService("ProximityPromptService")
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+
+local localPlayer = Players.LocalPlayer
+local deem = script.promptBeem
+local highlightTweenDuration = 0.2
+
+local function ensureAttachment(part: BasePart): Attachment
+	local existingAttachment = part:FindFirstChild("RootRigAttachment")
+	if existingAttachment then return existingAttachment end
+
+	local newAttachment = Instance.new("Attachment")
+	newAttachment.Name = "PromptAttachment"
+	newAttachment.Parent = part
+	return newAttachment
+end
+
+local function setupBeem(prompt: ProximityPrompt)
+	local part = prompt.Parent
+	if not part or not part:IsA("BasePart") then return end
+	local character = localPlayer.Character
+	if not character then return end
+
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	local attach0 = ensureAttachment(root)
+	local attach1 = ensureAttachment(part)
+
+	local beem = deem:Clone()
+	beem.Attachment0 = attach0
+	beem.Attachment1 = attach1
+	beem.Transparency = NumberSequence.new(0)
+	beem.Parent = part
+end
+
+local function removeBeem(prompt: ProximityPrompt)
+	local part = prompt.Parent
+	if not part then return end
+	local beem = part:FindFirstChild(deem.Name)
+	if beem then
+		beem:Destroy()
+	end
+end
+
+local function tweenPrompt(prompt: ProximityPrompt, backgroundTransparency: number, textTransparency: number)
+	if not prompt or not prompt.Parent then
+		return
+	end
+	local newPrompt = prompt.Parent:FindFirstChild("Prompt")
+	if newPrompt then
+		local tweenInfo = TweenInfo.new(highlightTweenDuration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+		local properties = { BackgroundTransparency = backgroundTransparency }
+		local textProperties = { TextTransparency = textTransparency }
+
+		for _, ui in pairs(newPrompt:GetChildren()) do
+			if ui:IsA("TextLabel") then
+				TweenService:Create(ui, tweenInfo, properties):Play()
+				TweenService:Create(ui, tweenInfo, textProperties):Play()
+			end
+		end
+	end
+end
+
+local function togglePromptUI(prompt: ProximityPrompt, value: boolean)
+	if not prompt or not prompt.Parent then
+		return
+	end
+	local part = prompt.Parent
+	local newPrompt = part:FindFirstChild("Prompt")
+
+	if not newPrompt then
+		newPrompt = script.Prompt:Clone()
+		newPrompt.Parent = part
+	end
+
+	newPrompt.Main.Key.Text = prompt.KeyboardKeyCode.Name
+	newPrompt.Main.Texto.Text = prompt.ActionText
+	newPrompt.Main.Objectiono.Text = prompt.ObjectText
+	newPrompt.Enabled = value
+end
+
+local function togglePrompt(value: boolean, prompt: ProximityPrompt)
+	if prompt.Style == Enum.ProximityPromptStyle.Default then
+		prompt.Style = Enum.ProximityPromptStyle.Custom
+	end
+
+	togglePromptUI(prompt, value)
+end
+
+local function promptHoldBegan(prompt: ProximityPrompt)
+	local newPrompt = prompt.Parent:FindFirstChild("Prompt")
+	local fillFrame = newPrompt.Main.Fill
+
+	if prompt.HoldDuration > 800 then return end
+
+	local tweenInfo = TweenInfo.new(prompt.HoldDuration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+	fillFrame.Visible = true
+	local tween = TweenService:Create(fillFrame, tweenInfo, { Size = UDim2.new(4, 0,0.05, 0) })
+	tween:Play()
+
+	prompt.PromptButtonHoldEnded:Once(function()
+		fillFrame.Visible = false
+		tween:Cancel()
+		fillFrame.Size = UDim2.new(0, 0,0.05, 0)
+	end)
+	
+end
+
+local highLights = {}
+
+local function addHighlight(instance: Instance)
+	if instance:IsA("Workspace") then
+		return
+	end
+	local highlight = Instance.new("Highlight")
+	table.insert(highLights, highlight)
+	highlight.Adornee = instance
+	highlight.OutlineTransparency = 1
+	highlight.DepthMode = "Occluded"
+	highlight.FillTransparency = 0.9
+	highlight.FillColor = Color3.fromHex("#ffffff")
+
+	if instance.Name == "ArmorStation" then
+		highlight.OutlineColor = Color3.fromHex("#ffc45d")
+	elseif instance.Name == "HealthStation" then
+		highlight.OutlineColor = Color3.fromHex("#3396ff")
+	else
+		highlight.OutlineColor = Color3.new(1, 1, 1)
+	end
+
+	highlight.Parent = instance
+
+	TweenService:Create(highlight, TweenInfo.new(highlightTweenDuration), { OutlineTransparency = 0.25 }):Play()
+	return highlight
+end
+
+local function removeHighlight(instance: Instance)
+	for i, thing in instance:GetChildren() do
+		if thing:IsA("Highlight") then
+			thing:Destroy()
+		end
+	end
+end
+
+for _, thing in pairs(game:GetDescendants()) do
+	if thing:IsA("ProximityPrompt") then
+		thing.Style = Enum.ProximityPromptStyle.Custom
+	end
+end
+
+ProximityPromptService.PromptTriggered:Connect(function(prompt)
+	local newPrompt = prompt.Parent:FindFirstChild("Prompt")
+	if not newPrompt then
+		return
+	end
+	local bar: Frame = newPrompt.Main.Background
+	TweenService:Create(bar, TweenInfo.new(0.3, Enum.EasingStyle.Linear), {BackgroundColor3 = Color3.new(0.0235294, 1, 0.415686)}):Play()
+	wait(0.3)
+	TweenService:Create(bar, TweenInfo.new(0.3, Enum.EasingStyle.Linear), {BackgroundColor3 = Color3.new(1, 1, 1)}):Play()
+end)
+
+ProximityPromptService.PromptShown:Connect(function(prompt)
+	local team = prompt:FindFirstChildWhichIsA("ObjectValue") or prompt.Parent.Parent:FindFirstChildWhichIsA("ObjectValue")
+	if team and team.Value and team.Value:IsA("Team") then
+		if localPlayer.Team ~= team.Value and not localPlayer.Character:FindFirstChild("Lockpick") then return end
+	end
+
+	if prompt:FindFirstChild("PromptRestrictions") then
+		local modul = require(prompt:FindFirstChild("PromptRestrictions"))
+		if not modul.canSee(localPlayer) then
+			return
+		end
+	end
+	--if localPlayer.Character:FindFirstChild("Lockpick") and prompt.Name ~= "DoorPrompt" then return end
+
+	togglePrompt(true, prompt)
+	tweenPrompt(prompt, 0.4, 0)
+	setupBeem(prompt)
+
+	local parentToHighlight = prompt.Parent.Parent
+	if parentToHighlight then
+		addHighlight(parentToHighlight)
+	end
+end)
+
+ProximityPromptService.PromptHidden:Connect(function(prompt)
+	tweenPrompt(prompt, 1, 1)
+	togglePrompt(false, prompt)
+	removeBeem(prompt)
+	if not prompt or not prompt.Parent then
+		return
+	end
+	local parentToHighlight = prompt.Parent.Parent
+	if parentToHighlight then
+		removeHighlight(parentToHighlight)
+	end
+end)
+
+ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt)
+	local team = prompt:FindFirstChildWhichIsA("ObjectValue") or prompt.Parent.Parent:FindFirstChildWhichIsA("ObjectValue")
+	if team and team.Value and team.Value:IsA("Team") then
+		if localPlayer.Team ~= team.Value then return end
+	end
+	promptHoldBegan(prompt)
+end)
+
+localPlayer.ChildRemoved:Connect(function()
+	for i, hl in highLights do
+		hl:Destroy()
+	end
+end)
+
+ProximityPromptService.MaxPromptsVisible = 1
