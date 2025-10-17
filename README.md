@@ -2,5 +2,5 @@
 
 - This file contains all of my code snippets for public.
 - All Code was wrote by me and I do not permitt use of it. Read LICENSE for information.
-- -- WorkExamples.rbxl is a Roblox place file containing some may work
+- -- WorkExamples.rbxl is a Roblox place file containing some my work
 - -- TexmSamples contains raw lua text file of my code snippets.
