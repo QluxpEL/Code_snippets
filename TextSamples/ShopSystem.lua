@@ -2,6 +2,7 @@
 [3] Simple shop with server authority, Local + Server Script – New Section
 -- A simple shop for player to purchase items or anything else, E.g., Developers can script to trigger an event. Additionally,
 -- developer can script any beforePurchase check, making sure player can purchase a specific item under a specific condition other than having Money for it.
+-- Multiple example items are in WorkExamples.rbxl
 
 Local Script: 
 local template = script.Template
