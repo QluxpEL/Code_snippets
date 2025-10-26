@@ -9,8 +9,8 @@ local overLap = require(game.ReplicatedStorage.MainStorage.Modules.PlayerRelated
 
 starterUI:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, false)
 
--- Table that saves position of tools within the inventory
--- that can be used to sort items upon respawn to save players time.
+-- Persistent storage that remembers where each tool was placed in the inventory (by tool name)
+-- This allows the inventory to restore tool positions when the player respawns
 local lastSavedToolsPositions = {
 	["1"] = nil,
 	["2"] = nil,
@@ -41,10 +41,11 @@ local backPack = player.Backpack
 local equipColor = Color3.new(0.396078, 0.486275, 1)
 local unEquipColor = Color3.new(1, 1, 1)
 
+-- A template UI for the tool display
 local template = screen.Template
 
 -- Tracks all tools in player's inventory
--- The order of the tools may not equal the same position within the inventory
+-- The order of the tools may not equal to the position within the inventory
 local tools = {}
 
 -- Value that stores the currently equipped tool
@@ -68,6 +69,7 @@ local function creatNewInventoryFrame(toolPosition)
 end
 
 
+-- Maps KeyCode names to their numeric equivalents for keyboard shortcuts (1-9 keys)
 local stringToNumber = {
 	["One"] = 1,
 	["Two"] = 2,
@@ -111,7 +113,8 @@ local function handelUnequip()
 	if not humanoid then
 		return
 	end
-	-- Searches for a ToolsFrame object value inside the equipped tool
+	-- Each tool has an ObjectValue called "ToolsFrame" that references its UI frame
+	-- This allows lookups: tool -> frame and frame -> tool
 	local toolFrame = equiped:FindFirstChild("ToolsFrame")
 	if not toolFrame then
 		return
@@ -145,7 +148,7 @@ local function handelEqup(tool)
 	if not ui.Enabled then
 		return
 	end
-	-- Searches for a ToolsFrame object value inside the equipped tool
+	-- Searches for a object value named ToolsFrame inside the equipped tool
 	local toolFrame = tool:FindFirstChild("ToolsFrame")
 	if not toolFrame then
 		return
@@ -181,7 +184,7 @@ game:GetService("UserInputService").InputBegan:Connect(function(input, proc)
 
 			frame.Core.UIDragDetector.Enabled = displayingFullInventory
 
-			-- If ToolName or ToolIcon.Image is an empty string, the slot is empty.
+			-- If ToolName or ToolIcon.Image is an empty string, the slot is not assigned to any tool.
 			-- In that case, we only need to show or hide the slot.
 			if frame.Core.ToolName.Text == "" and frame.Core.ToolIcon.Image == "" then
 				frame.Visible = displayingFullInventory
@@ -190,15 +193,14 @@ game:GetService("UserInputService").InputBegan:Connect(function(input, proc)
 
 			-- We don't modify frames that already contain a tool,
 			-- because all tools in the inventory are displayed by default,
-			-- and we don't want to hide them when closing the backpack.
+			-- and we don't want to hide them when closing the backpack, since that would prevent players from seeing their tools
 
 			-- We enable/disable the button that handles manual tool equipping
 			-- to allow or restrict the drag detector from moving the tool.
 			frame.Core.TextButton.Visible = not displayingFullInventory
 		end
 
-		-- Stopping the code progression, since we know a key was pressed to toggle the inventory
-		-- not to equip or unequip any tool
+		-- Stopping the code progression, since we know a key was pressed to toggle the inventory, not to equip or unequip any tool
 		return
 	end
 
@@ -211,11 +213,11 @@ game:GetService("UserInputService").InputBegan:Connect(function(input, proc)
 	if not inputNumber then
 		return
 	end
-	-- The specific tool and its frame in the inventory UI
+	-- The specific tool and its frame in the inventory UI players is wishing to use
 	local targetTool: Tool = nil
 	local targetFrame: Frame = nil
 	for i, tool: Tool in tools do
-		-- Searches for ToolsFrame object value inside the tool
+		-- Searches for a object value named ToolsFrame inside the equipped tool
 		local toolsFrame = tool:FindFirstChild("ToolsFrame")
 		if not toolsFrame then
 			continue
@@ -266,14 +268,18 @@ local function hasAnyToolSavedPosition()
 	return false
 end
 
+-- When a player respawns, their starting tools are given rapidly within a few seconds
+-- We use timestamps to identify this "initial batch" of tools and apply saved positions only to them
+-- This prevents tools picked up later in gameplay from jumping to saved positions
+
 -- Keeps track of the Unix timestamp of when said actions happened
 -- 0 means the variable was not changed.
 
 -- Both of these restart upon player respawn
-local timeSiceFirstToolWasGiven = 0
 local timeSincePlayerSpawn = 0
 
--- Keeps track of numbers that have already been assigned to a tool slot
+-- Tracks which inventory slots (1-9) are already occupied during the sorting phase
+-- This prevents multiple tools from trying to claim the same slot when restoring positions
 local usedToolSpots = {}
 
 local function addNewTool(tool: Tool)
@@ -291,21 +297,11 @@ local function addNewTool(tool: Tool)
 
 	local currentTime = tick()
 
-	-- Checks if this is the first tool to be added in the inventory
-	if timeSiceFirstToolWasGiven == 0 then
-		timeSiceFirstToolWasGiven = tick()
-	end
-
-	-- If the tool is being added to the inventory within three seconds of the first tool being added
-	-- we will attempt to sort the tool by the lastSavedToolsPositions table
-	-- This is here to only sort the first few tools being given to player and not to attempt to sort all the tools given to player even later on
-	if currentTime - timeSiceFirstToolWasGiven < 3 then
-		sortTool = true
-	end
-
-	-- A safeguard that automatically stops all attempts of tool sorting after 10 seconds of player spawning
-	-- If the first tool is given after 10 seconds of player spawning, it will be treated as a new tool to just be added by normal means.
-	if currentTime - timeSincePlayerSpawn > 10 then
+	-- A safeguard that automatically stops all attempts of tool sorting after 8 seconds of player spawning
+	-- If the first tool is given after 8 seconds of player spawning, it will be treated as a new tool to just be added by normal means.
+	-- This perits player to sort their starting items how ever they wish, and on their next respawn, when the first tools are beign given,
+	-- the script will move the tools on players behalf to save their time and confort.
+	if currentTime - timeSincePlayerSpawn > 8 then
 		sortTool = false
 	end
 
@@ -313,8 +309,8 @@ local function addNewTool(tool: Tool)
 
 	-- Checks if the script needs to sort the tool or not
 	if sortTool and hasAnyToolSavedPosition() then
-		-- Loops through all possible spots in the table to see if the tool matches any
-
+		-- Two-pass slot assignment for sorted tools:
+		-- Pass 1: Try to find the tool's saved position if available and not already used
 		for i, toolInSpot in pairs(lastSavedToolsPositions) do
 			if toolInSpot == tool.Name then
 				local isSpotUsed = false
@@ -336,7 +332,8 @@ local function addNewTool(tool: Tool)
 			end
 		end
 
-		-- If the first check could not find a saved spot, this will attempt to find an empty spot that is not reserved by any other tool
+		-- If the tool had no saved position or its saved spot was taken,
+		-- find any empty slot that isn't reserved by another tool in the saved positions table
 		if not toolFrame then
 			-- 9 because we have 9 tool slots
 			for i = 1, 9 do
@@ -385,6 +382,7 @@ local function addNewTool(tool: Tool)
 	-- Sets the text to display the tool name only if the tool does not have an image
 	toolFrame.Core.ToolName.Text = tool.TextureId == "" and tool.Name or ""
 
+	-- Bidirectional linking system:
 	-- Creates the object value, parents it to the tool, and its value is set to the tool frame.
 	-- This is used to easily fetch the current tool frame just by having the tool
 	local objectVlue = Instance.new("ObjectValue")
@@ -412,8 +410,9 @@ local function addNewTool(tool: Tool)
 		end
 	end
 
-	-- Detecting and handling dragging of the tool
+	-- Drag-and-drop implementation with click detection:
 	-- UIDragDetector is only enabled if the player is viewing the whole backpack
+	-- Uses timing to differentiate between clicks (<0.11s) and actual drags
 
 	toolFrame.Core.UIDragDetector.DragStart:Connect(function()
 		local startTime = os.clock()
@@ -435,7 +434,10 @@ local function addNewTool(tool: Tool)
 					break
 				end
 			end
-			-- If there is any UI overlap, we will switch the two frames, resulting in swapping tool positions
+
+			-- If dragged tool overlaps another slot, swap their properties (names, references, etc.)
+			-- instead of moving them. This is more efficient and maintains event connections
+			-- It's worth mentioning there is a UIList layout that will swap the positions by the name of the slot.
 			if overlapingWith then
 
 				-- We simply swap the frame properties to "simulate" a tool swap
@@ -452,6 +454,7 @@ local function addNewTool(tool: Tool)
 				local overlapTool = overlapingWith.ToolRef.Value
 				local currentTool = toolFrame.ToolRef.Value
 
+				-- Update saved positions for both swapped tools
 				if overlapTool then
 					lastSavedToolsPositions[overlapingWith.Name] = overlapTool.Name
 				else
@@ -464,6 +467,7 @@ local function addNewTool(tool: Tool)
 					lastSavedToolsPositions[toolFrame.Name] = nil
 				end
 			end
+			
 			toolFrame.Core.Position = UDim2.new(0,0,0,0)
 		end)
 	end)
@@ -479,7 +483,7 @@ local function handelToolRemoval(tool: Tool)
 		return
 	end
 	local frame = toolsFrameValue.Value
-	local frameNumber = frame.Name -- Once again, frame.Name is a string position of the tool in the player's inventory
+	local frameNumber = frame.Name -- Once again, frame.Name is a string number that represents the position of the tool in the player's inventory
 	local _, position = checkToolsTableForTool(tool)
 
 	if equiped == tool then
@@ -497,7 +501,8 @@ local function handelToolRemoval(tool: Tool)
 	creatNewInventoryFrame(frameNumber)
 end
 
--- Backpack and character added connections. This is here to disconnect them upon player respawn to save memory
+-- Store event connections in variables so they can be properly disconnected on respawn
+-- This prevents memory leaks from accumulating duplicate events
 
 local backpackChildRemovedConnection
 local characterChildRemovedConnection
@@ -517,6 +522,7 @@ local function connectBackpack(backpack)
 end
 
 local function connectCharacter(character)
+	-- Full inventory reset on character spawn
 	for i, thing in screen:GetChildren() do
 		if not thing:IsA("Frame") or thing.Name == "Template" then
 			continue
