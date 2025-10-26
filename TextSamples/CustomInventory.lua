@@ -1,6 +1,12 @@
 -- One of the latest and hardest scripts to accomplish, done by me, a custom inventory system.
 -- Some code may have been inspired by public sources such as Roblox dev forums while I was doing research on how to perform such a system.
 
+-- Semi advance inventory system handeling basic interactions like equiping/unequiping tools and swaping them.
+-- Additionly, this system saves the last know possition in the inventory, meaning, player can move their starting tools like they wish, and after respawn,
+-- they will be at the same position, saving time and giving player confort.
+-- The inventory of the play can be easly disabled by just settign the Enabled property of the UI to false.
+
+
 local starterUI = game:GetService("StarterGui")
 local mouse = game.Players.LocalPlayer:GetMouse()
 local tweenService = game:GetService("TweenService")
