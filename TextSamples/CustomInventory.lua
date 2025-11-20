@@ -1,11 +1,20 @@
 -- One of the latest and hardest scripts to accomplish, done by me, a custom inventory system.
 -- Some code may have been inspired by public sources such as Roblox dev forums while I was doing research on how to perform such a system.
 
--- Semi advance inventory system handeling basic interactions like equiping/unequiping tools and swaping them.
--- Additionly, this system saves the last know possition in the inventory, meaning, player can move their starting tools like they wish, and after respawn,
--- they will be at the same position, saving time and giving player confort.
--- The inventory of the play can be easly disabled by just settign the Enabled property of the UI to false.
+-- Semi advance inventory system handling basic interactions like equipping/unequipping tools and swapping them.
+-- Additionally, this system saves the last known position in the inventory, meaning, player can move their starting tools like they wish, and after respawn,
+-- they will be at the same position, saving time and giving player comfort.
+-- The inventory of the player can be easily disabled by just setting the Enabled property of the UI to false.
 
+local config = {
+	inventorySlots = 9,
+	tweenTime = 0.15,
+	equippedSizeMultiplier = 1.125,
+	toolSortingTimeout = 8, -- seconds after spawn to stop sorting tools
+	clickDragThreshold = 0.11, -- seconds to distinguish click from drag
+	equipColor = Color3.new(0.396078, 0.486275, 1),
+	unequipColor = Color3.new(1, 1, 1),
+}
 
 local starterUI = game:GetService("StarterGui")
 local mouse = game.Players.LocalPlayer:GetMouse()
@@ -40,12 +49,7 @@ ui.Enabled = true
 
 local displayingFullInventory = false
 
-local tweenTime = 0.15
-
 local backPack = player.Backpack
-
-local equipColor = Color3.new(0.396078, 0.486275, 1)
-local unEquipColor = Color3.new(1, 1, 1)
 
 -- A template UI for the tool display
 local template = screen.Template
@@ -55,9 +59,47 @@ local template = screen.Template
 local tools = {}
 
 -- Value that stores the currently equipped tool
-local equiped = nil
+local equipped = nil
 
-local function creatNewInventoryFrame(toolPosition)
+-- Maps KeyCode names to their numeric equivalents for keyboard shortcuts (1-9 keys)
+local stringToNumber = {
+	["One"] = 1,
+	["Two"] = 2,
+	["Three"] = 3,
+	["Four"] = 4,
+	["Five"] = 5,
+	["Six"] = 6,
+	["Seven"] = 7,
+	["Eight"] = 8,
+	["Nine"] = 9,
+}
+
+local defaultSize = screen.Template.Size
+
+local equippedSize = defaultSize + UDim2.new(
+	defaultSize.X.Scale * (config.equippedSizeMultiplier - 1), 
+	0, 
+	defaultSize.Y.Scale * (config.equippedSizeMultiplier - 1), 
+	0
+)
+
+-- Keeps track of the Unix timestamp of when said actions happened
+-- 0 means the variable was not changed.
+
+-- Both of these restart upon player respawn
+local timeSincePlayerSpawn = 0
+
+-- Tracks which inventory slots (1-9) are already occupied during the sorting phase
+-- This prevents multiple tools from trying to claim the same slot when restoring positions
+local usedToolSpots = {}
+
+-- Store event connections in variables so they can be properly disconnected on respawn
+-- This prevents memory leaks from accumulating duplicate events
+
+local backpackChildRemovedConnection
+local characterChildRemovedConnection
+
+local function createNewInventoryFrame(toolPosition)
 	-- toolPosition argument sets where in the UI should the tool appear
 	local clonedTemplate = template:Clone()
 	-- Core frame of the tool
@@ -74,29 +116,15 @@ local function creatNewInventoryFrame(toolPosition)
 	clonedTemplate.Parent = screen
 end
 
-
--- Maps KeyCode names to their numeric equivalents for keyboard shortcuts (1-9 keys)
-local stringToNumber = {
-	["One"] = 1,
-	["Two"] = 2,
-	["Three"] = 3,
-	["Four"] = 4,
-	["Five"] = 5,
-	["Six"] = 6,
-	["Seven"] = 7,
-	["Eight"] = 8,
-	["Nine"] = 9,
-}
-
 -- Searches the tools table for specified tool
-local function checkToolsTableForTool(tool, toolPosotion)
+local function checkToolsTableForTool(tool, toolPosition)
 	if not tool then
 		return false, nil
 	end
 
 	local foundTool, toolPositionInTable = false, nil
-	for i, speacialTool in tools do
-		if speacialTool == tool then
+	for i, toolFromTable in tools do
+		if toolFromTable == tool then
 			foundTool = true
 			toolPositionInTable = i
 			break
@@ -106,13 +134,33 @@ local function checkToolsTableForTool(tool, toolPosotion)
 	return foundTool, toolPositionInTable
 end
 
-local defaultSize = screen.Template.Size
+-- Gets the next available slot in the inventory
+local function getAvailableSlot()
+	for i = 1, config.inventorySlots do
+		local frame = screen:FindFirstChild(tostring(i))
+		-- Once again, if .ToolName.Text or .ToolIcon.Image are empty strings, that means no tool is assigned to the frame
+		-- meaning it's also empty
+		if frame and frame.Core.ToolName.Text == "" and frame.Core.ToolIcon.Image == "" then
+			return i
+		end
+	end
+	return nil
+end
 
-local equipedSize = defaultSize + UDim2.new(defaultSize.X.Scale/8, 0, defaultSize.Y.Scale/8, 0)
+-- Searches the lastSavedToolsPositions table to check whether there is at least one tool with a previously saved position.
+local function hasAnyToolSavedPosition()
+	for _, toolName in pairs(lastSavedToolsPositions) do
+		if toolName then
+			return true
+		end
+	end
+	return false
+end
 
-local function handelUnequip()
+
+local function handleUnequip()
 	-- Safe check to make sure there is a tool to be unequipped
-	if not equiped then
+	if not equipped then
 		return
 	end
 	local humanoid: Humanoid = player.Character:FindFirstChild("Humanoid")
@@ -121,7 +169,7 @@ local function handelUnequip()
 	end
 	-- Each tool has an ObjectValue called "ToolsFrame" that references its UI frame
 	-- This allows lookups: tool -> frame and frame -> tool
-	local toolFrame = equiped:FindFirstChild("ToolsFrame")
+	local toolFrame = equipped:FindFirstChild("ToolsFrame")
 	if not toolFrame then
 		return
 	end
@@ -129,14 +177,14 @@ local function handelUnequip()
 		return
 	end
 	toolFrame = toolFrame.Value
-	toolFrame.Core.UIStroke.Color = unEquipColor
-	tweenService:Create(toolFrame.Core.Bar, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {Transparency = 1}):Play()
-	tweenService:Create(toolFrame, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {Size = defaultSize}):Play()
-	equiped = nil
+	toolFrame.Core.UIStroke.Color = config.unequipColor
+	tweenService:Create(toolFrame.Core.Bar, TweenInfo.new(config.tweenTime, Enum.EasingStyle.Linear), {Transparency = 1}):Play()
+	tweenService:Create(toolFrame, TweenInfo.new(config.tweenTime, Enum.EasingStyle.Linear), {Size = defaultSize}):Play()
+	equipped = nil
 	humanoid:UnequipTools()
 end
 
-local function handelEqup(tool)
+local function handleEquip(tool)
 	local humanoid: Humanoid = player.Character:FindFirstChild("Humanoid")
 	-- Check that makes sure only alive players can equip tools
 	if not humanoid or humanoid.Health <= 0 then
@@ -145,25 +193,25 @@ local function handelEqup(tool)
 	if not tool then
 		return
 	end
-	if equiped == tool then
+	if equipped == tool then
 		return
 	end
-	if equiped then
-		handelUnequip()
+	if equipped then
+		handleUnequip()
 	end
 	if not ui.Enabled then
 		return
 	end
-	-- Searches for a object value named ToolsFrame inside the equipped tool
+	-- Searches for an object value named ToolsFrame inside the equipped tool
 	local toolFrame = tool:FindFirstChild("ToolsFrame")
 	if not toolFrame then
 		return
 	end
 	toolFrame = toolFrame.Value
-	toolFrame.Core.UIStroke.Color = equipColor
-	tweenService:Create(toolFrame.Core.Bar, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {Transparency = 0}):Play()
-	tweenService:Create(toolFrame, TweenInfo.new(tweenTime, Enum.EasingStyle.Linear), {Size = equipedSize}):Play()
-	equiped = tool
+	toolFrame.Core.UIStroke.Color = config.equipColor
+	tweenService:Create(toolFrame.Core.Bar, TweenInfo.new(config.tweenTime, Enum.EasingStyle.Linear), {Transparency = 0}):Play()
+	tweenService:Create(toolFrame, TweenInfo.new(config.tweenTime, Enum.EasingStyle.Linear), {Size = equippedSize}):Play()
+	equipped = tool
 	humanoid:EquipTool(tool)
 end
 
@@ -223,7 +271,7 @@ game:GetService("UserInputService").InputBegan:Connect(function(input, proc)
 	local targetTool: Tool = nil
 	local targetFrame: Frame = nil
 	for i, tool: Tool in tools do
-		-- Searches for a object value named ToolsFrame inside the equipped tool
+		-- Searches for an object value named ToolsFrame inside the equipped tool
 		local toolsFrame = tool:FindFirstChild("ToolsFrame")
 		if not toolsFrame then
 			continue
@@ -244,49 +292,17 @@ game:GetService("UserInputService").InputBegan:Connect(function(input, proc)
 	end
 
 	-- if the player has selected the same tool as currently equipped, that can only mean they wish to unequip it
-	if equiped == targetTool then
-		handelUnequip()
+	if equipped == targetTool then
+		handleUnequip()
 	else
-		handelEqup(targetTool)
+		handleEquip(targetTool)
 	end
 end)
 
--- Gets the next available slot in the inventory
-local function getAvalaibleSlot()
-	for i = 1, 9 do
-		local frame = screen:FindFirstChild(tostring(i))
-		-- Once again, if .ToolName.Text or .ToolIcon.Image are empty strings, that means no tool is assigned to the frame
-		-- meaning it's also empty
-		if frame and frame.Core.ToolName.Text == "" and frame.Core.ToolIcon.Image == "" then
-			return i
-		end
-	end
-	return nil
-end
-
--- Searches the lastSavedToolsPositions table to check whether there is at least one tool with a previously saved position.
-local function hasAnyToolSavedPosition()
-	for _, toolName in pairs(lastSavedToolsPositions) do
-		if toolName then
-			return true
-		end
-	end
-	return false
-end
 
 -- When a player respawns, their starting tools are given rapidly within a few seconds
 -- We use timestamps to identify this "initial batch" of tools and apply saved positions only to them
 -- This prevents tools picked up later in gameplay from jumping to saved positions
-
--- Keeps track of the Unix timestamp of when said actions happened
--- 0 means the variable was not changed.
-
--- Both of these restart upon player respawn
-local timeSincePlayerSpawn = 0
-
--- Tracks which inventory slots (1-9) are already occupied during the sorting phase
--- This prevents multiple tools from trying to claim the same slot when restoring positions
-local usedToolSpots = {}
 
 local function addNewTool(tool: Tool)
 
@@ -303,11 +319,11 @@ local function addNewTool(tool: Tool)
 
 	local currentTime = tick()
 
-	-- A safeguard that automatically stops all attempts of tool sorting after 8 seconds of player spawning
-	-- If the first tool is given after 8 seconds of player spawning, it will be treated as a new tool to just be added by normal means.
-	-- This perits player to sort their starting items how ever they wish, and on their next respawn, when the first tools are beign given,
-	-- the script will move the tools on players behalf to save their time and confort.
-	if currentTime - timeSincePlayerSpawn > 8 then
+	-- A safeguard that automatically stops all attempts of tool sorting after configured seconds of player spawning
+	-- If the first tool is given after the timeout, it will be treated as a new tool to just be added by normal means.
+	-- This permits player to sort their starting items however they wish, and on their next respawn, when the first tools are being given,
+	-- the script will move the tools on players behalf to save their time and comfort.
+	if currentTime - timeSincePlayerSpawn > config.toolSortingTimeout then
 		sortTool = false
 	end
 
@@ -317,55 +333,43 @@ local function addNewTool(tool: Tool)
 	if sortTool and hasAnyToolSavedPosition() then
 		-- Two-pass slot assignment for sorted tools:
 		-- Pass 1: Try to find the tool's saved position if available and not already used
-		for i, toolInSpot in pairs(lastSavedToolsPositions) do
+		-- This is useful if the player has two kinds of a same item, but differently arranged. This makes sure that if e.g. player has two SMGs, it won't attempt to put two SMGs into one slot
+		for slot, toolInSpot in lastSavedToolsPositions do
 			if toolInSpot == tool.Name then
-				local isSpotUsed = false
-
-
-				-- Checks if the tool spot that the tool is requesting to be in is not already used
-				for _, spotAlreadyUsed in pairs(usedToolSpots) do
-					if tonumber(i) == spotAlreadyUsed then
-						isSpotUsed = true
-						break
-					end
-				end
+				-- Uses usedToolSpots to attempt find the slot number, if it finds the slot number, it means the slot is already used
+				local isSpotUsed = table.find(usedToolSpots, tonumber(slot))
 
 				if not isSpotUsed then
-					table.insert(usedToolSpots, tonumber(i))
-					toolFrame = screen:FindFirstChild(tostring(i))
+					table.insert(usedToolSpots, tonumber(slot))
+					toolFrame = screen:FindFirstChild(tostring(slot))
 					break
 				end
 			end
+
 		end
 
 		-- If the tool had no saved position or its saved spot was taken,
 		-- find any empty slot that isn't reserved by another tool in the saved positions table
 		if not toolFrame then
-			-- 9 because we have 9 tool slots
-			for i = 1, 9 do
-				-- Fetches tool or nil in the lastSavedToolsPositions
-				local toolInTheRspectveSavedPosition = tonumber(lastSavedToolsPositions[tostring(i)])
-
-				--for savedSlotNumber, savedTool in pairs(lastSavedToolsPositions) do
-				--	if tonumber(savedSlotNumber) == i and savedTool then
-				--		isReserved = true
-				--		break
-				--	end
-				--end
+			-- Loop through all inventory slots
+			for slot = 1, config.inventorySlots do
+				-- Checks to see if there are any tools that reserved this position
+				local toolInTheRespectiveSavedPosition = tonumber(lastSavedToolsPositions[tostring(slot)])
 
 				-- If there is no saved tool in the saved position, we can safely use it without interrupting other tool additions
-				if not toolInTheRspectveSavedPosition then
-					if screen:FindFirstChild(tostring(i)) then
-						toolFrame = screen:FindFirstChild(tostring(i))
+				if not toolInTheRespectiveSavedPosition then
+					if screen:FindFirstChild(tostring(slot)) then
+						toolFrame = screen:FindFirstChild(tostring(slot))
 						break
 					end
 				end
+
 			end
 		end
 	else
 		-- If no sorting is needed, we simply fetch any empty slot without considering the lastSavedToolsPositions table,
 		-- since by this point, the starting tools should have already been given to the player, and we don't need to skip any slots to ensure safe additions.
-		local availableSlot = getAvalaibleSlot()
+		local availableSlot = getAvailableSlot()
 		if availableSlot then
 			toolFrame = screen:FindFirstChild(tostring(availableSlot))
 		end
@@ -391,10 +395,10 @@ local function addNewTool(tool: Tool)
 	-- Bidirectional linking system:
 	-- Creates the object value, parents it to the tool, and its value is set to the tool frame.
 	-- This is used to easily fetch the current tool frame just by having the tool
-	local objectVlue = Instance.new("ObjectValue")
-	objectVlue.Value = toolFrame
-	objectVlue.Name = "ToolsFrame"
-	objectVlue.Parent = tool
+	local objectValue = Instance.new("ObjectValue")
+	objectValue.Value = toolFrame
+	objectValue.Name = "ToolsFrame"
+	objectValue.Parent = tool
 
 	-- ToolRef is an ObjectValue, we set it to easily fetch a tool just from a UI slot
 	toolFrame.ToolRef.Value = tool
@@ -409,34 +413,35 @@ local function addNewTool(tool: Tool)
 		if not humanoid or humanoid.Health <= 0 then
 			return
 		end
-		if equiped == tool then
-			handelUnequip()
+		if equipped == tool then
+			handleUnequip()
 		else
-			handelEqup(tool)
+			handleEquip(tool)
 		end
 	end
 
 	-- Drag-and-drop implementation with click detection:
 	-- UIDragDetector is only enabled if the player is viewing the whole backpack
-	-- Uses timing to differentiate between clicks (<0.11s) and actual drags
+	-- Uses timing to differentiate between clicks and actual drags
 
 	toolFrame.Core.UIDragDetector.DragStart:Connect(function()
 		local startTime = os.clock()
 		toolFrame.Core.UIDragDetector.DragEnd:Once(function()
 			local endTime = os.clock()
-			-- If the time of drag is 0.11 seconds or less, we will act as if the button for equipping/unequipping was pressed
+			-- If the time of drag is less than threshold, we will act as if the button for equipping/unequipping was pressed
 			-- since it is disabled, and it cannot be enabled, because then the UIDragDetector would not function
-			if (endTime - startTime) <= 0.11 then
+			if (endTime - startTime) <= config.clickDragThreshold then
 				buttonPressed()
 			end
-			local overlapingWith = nil
+			local overlappingWith = nil
 			-- Gets all of the frames and checks if the UI is overlapping with another UI tool
 			for i, specialFrame in screen:GetChildren() do
 				if not specialFrame:IsA("Frame") or specialFrame.Name == "Template" or specialFrame == toolFrame then
 					continue
 				end
+				
 				if overLap.isOverlapping(toolFrame.Core, specialFrame.Core) then
-					overlapingWith = specialFrame
+					overlappingWith = specialFrame
 					break
 				end
 			end
@@ -444,27 +449,27 @@ local function addNewTool(tool: Tool)
 			-- If dragged tool overlaps another slot, swap their properties (names, references, etc.)
 			-- instead of moving them. This is more efficient and maintains event connections
 			-- It's worth mentioning there is a UIList layout that will swap the positions by the name of the slot.
-			if overlapingWith then
+			if overlappingWith then
 
 				-- We simply swap the frame properties to "simulate" a tool swap
 
-				local overlapName = overlapingWith.Name
-				local standartFrameName = toolFrame.Name
+				local overlapName = overlappingWith.Name
+				local standardFrameName = toolFrame.Name
 
-				overlapingWith.Name = standartFrameName
+				overlappingWith.Name = standardFrameName
 				toolFrame.Name = overlapName
 
-				overlapingWith.Core.ToolPosition.Text = standartFrameName
+				overlappingWith.Core.ToolPosition.Text = standardFrameName
 				toolFrame.Core.ToolPosition.Text = overlapName
 
-				local overlapTool = overlapingWith.ToolRef.Value
+				local overlapTool = overlappingWith.ToolRef.Value
 				local currentTool = toolFrame.ToolRef.Value
 
 				-- Update saved positions for both swapped tools
 				if overlapTool then
-					lastSavedToolsPositions[overlapingWith.Name] = overlapTool.Name
+					lastSavedToolsPositions[overlappingWith.Name] = overlapTool.Name
 				else
-					lastSavedToolsPositions[overlapingWith.Name] = nil
+					lastSavedToolsPositions[overlappingWith.Name] = nil
 				end
 
 				if currentTool then
@@ -473,7 +478,7 @@ local function addNewTool(tool: Tool)
 					lastSavedToolsPositions[toolFrame.Name] = nil
 				end
 			end
-			
+
 			toolFrame.Core.Position = UDim2.new(0,0,0,0)
 		end)
 	end)
@@ -482,7 +487,7 @@ local function addNewTool(tool: Tool)
 end
 
 -- A function that removes the tool from the player's inventory
-local function handelToolRemoval(tool: Tool)
+local function handleToolRemoval(tool: Tool)
 	-- Searches for an object value named ToolsFrame, whose Value is the inventory frame
 	local toolsFrameValue = tool:FindFirstChild("ToolsFrame")
 	if not toolsFrameValue then
@@ -492,8 +497,8 @@ local function handelToolRemoval(tool: Tool)
 	local frameNumber = frame.Name -- Once again, frame.Name is a string number that represents the position of the tool in the player's inventory
 	local _, position = checkToolsTableForTool(tool)
 
-	if equiped == tool then
-		equiped = nil
+	if equipped == tool then
+		equipped = nil
 	end
 
 	if position then
@@ -504,14 +509,9 @@ local function handelToolRemoval(tool: Tool)
 
 	-- Removes the frame completely and then instantly creates a new frame at its original position
 	frame:Destroy()
-	creatNewInventoryFrame(frameNumber)
+	createNewInventoryFrame(frameNumber)
 end
 
--- Store event connections in variables so they can be properly disconnected on respawn
--- This prevents memory leaks from accumulating duplicate events
-
-local backpackChildRemovedConnection
-local characterChildRemovedConnection
 
 local function connectBackpack(backpack)
 	if backpackChildRemovedConnection then
@@ -520,11 +520,13 @@ local function connectBackpack(backpack)
 
 	backpackChildRemovedConnection = backpack.ChildRemoved:Connect(function(tool)
 		if tool.Parent ~= player.Character then
-			handelToolRemoval(tool)
+			handleToolRemoval(tool)
 			return
 		end
-		handelEqup(tool)
+		handleEquip(tool)
 	end)
+	
+	-- We can not have just one connection for backpack at the start, since I have found out that the removed and added back after every characterAdded event.
 end
 
 local function connectCharacter(character)
@@ -536,13 +538,13 @@ local function connectCharacter(character)
 		thing:Destroy()
 	end
 	table.clear(tools)
-	equiped = nil
-	timeSiceFirstToolWasGiven = false
+	equipped = nil
 	timeSincePlayerSpawn = tick()
 	usedToolSpots = {}
-	for i = 1, 9 do
-		creatNewInventoryFrame(i)
+	for i = 1, config.inventorySlots do
+		createNewInventoryFrame(i)
 	end
+	
 	for i, item in player.Backpack:GetChildren() do
 		addNewTool(item)
 	end
@@ -556,7 +558,7 @@ local function connectCharacter(character)
 			return
 		end
 		if tool.Parent ~= player.Backpack and tool.Parent ~= nil then
-			handelToolRemoval(tool)
+			handleToolRemoval(tool)
 			return
 		end
 	end)
