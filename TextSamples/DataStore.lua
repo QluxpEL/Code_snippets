@@ -38,8 +38,7 @@ game.Players.PlayerAdded:Connect(function(player)
 		warn("Error while fetching playerData for " .. player.Name)
 		return
 	end
-	-- We first check if the data loads correctly and only then creat the DataStore folder, by this, we are preventing errors when the player leaves.
-		
+
 	-- Create the main DataStore folder container
 	local dataStoreFolder = Instance.new("Folder")
 	dataStoreFolder.Name = "DataStore"
